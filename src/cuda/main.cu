@@ -6,8 +6,7 @@
 #include <xfdtd/waveform_source/tfsf_3d.h>
 
 #include <filesystem>
-#include <memory>
-#include <sstream>
+#include <xfdtd_cuda/simulation/simulation_hd.cuh>
 #include <xtensor/xnpy.hpp>
 
 #include "argparse.hpp"
@@ -18,13 +17,23 @@ int main(int argc, char** argv) {
 
   xfdtd::MpiSupport::setMpiParallelDim(1, 2, 2);
   xfdtd::MpiSupport::instance(argc, argv);
-  constexpr auto data_path_str = "./tmp/data/flow_field_cpu";
+  constexpr auto data_path_str = "./tmp/data/flow_field_cuda";
   const auto data_path = std::filesystem::path{data_path_str};
 
-  auto program = argparse::ArgumentParser("flow_field_cpu");
+  auto program = argparse::ArgumentParser("flow_field_cuda");
   program.add_argument("-f_p", "--flow_field_path")
       .help("flow field data path")
       .required();
+  program.add_argument("-g", "--cuda_grid_dim")
+      .help("cuda grid dim")
+      .default_value(std::vector<unsigned int>{128, 128, 2})
+      .nargs(3)
+      .action([](const std::string& value) { return std::stoi(value); });
+  program.add_argument("-b", "--cuda_block_dim")
+      .help("cuda block dim")
+      .default_value(std::vector<unsigned int>{2, 2, 64})
+      .nargs(3)
+      .action([](const std::string& value) { return std::stoi(value); });
   try {
     program.parse_args(argc, argv);
   } catch (const std::runtime_error& err) {
@@ -35,6 +44,17 @@ int main(int argc, char** argv) {
 
   auto flow_field = std::make_shared<xfdtd::FlowField>(
       "flow_field", program.get<std::string>("--flow_field_path"));
+  auto vector_to_dim = [](const auto& vec) {
+    dim3 dim;
+    dim.x = vec[0];
+    dim.y = vec[1];
+    dim.z = vec[2];
+    return dim;
+  };
+  auto grid_dim =
+      vector_to_dim(program.get<std::vector<int>>("--cuda_grid_dim"));
+  auto block_dim =
+      vector_to_dim(program.get<std::vector<int>>("--cuda_block_dim"));
 
   auto&& shape = flow_field->flowFieldShape();
   auto&& cube = shape.wrappedCube();
@@ -87,7 +107,10 @@ int main(int argc, char** argv) {
       11, 11, 11, xfdtd::Array<xfdtd::Real>{0.8 * f_max});
   s.addNF2FF(nf2ff_fd);
 
-  s.run(1000);
+  auto s_hd = xfdtd::cuda::SimulationHD{&s};
+  s_hd.setGridDim(grid_dim);
+  s_hd.setBlockDim(block_dim);
+  s_hd.run(1000);
 
   nf2ff_fd->setOutputDir((data_path / "fd").string());
   nf2ff_fd->processFarField(

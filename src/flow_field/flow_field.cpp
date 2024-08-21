@@ -100,11 +100,11 @@ auto FlowField::handleDispersion(
 
     // why dose it divide by 6 and 8?
     // Because my memory is not enough to simulate the more accurate result.
-    auto omega_p = e.omegaP() / 6;
-    auto gamma = e.gamma() / 8;
+    // auto omega_p = e.omegaP() / 6;
+    // auto gamma = e.gamma() / 8;
 
-    // auto omega_p = dice();
-    // auto gamma = dice();
+    auto omega_p = dice();
+    auto gamma = dice();
 
     auto dispersive_model = DrudeMedium::makeDrudeMedium(
         "null", 1, Array1D<Real>{omega_p}, Array1D<Real>{gamma});
