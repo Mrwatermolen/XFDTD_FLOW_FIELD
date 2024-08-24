@@ -1,13 +1,19 @@
 #include <xfdtd/boundary/pml.h>
+#include <xfdtd/common/type_define.h>
 #include <xfdtd/monitor/field_monitor.h>
 #include <xfdtd/monitor/movie_monitor.h>
 #include <xfdtd/nffft/nffft_frequency_domain.h>
+#include <xfdtd/parallel/mpi_support.h>
 #include <xfdtd/simulation/simulation.h>
 #include <xfdtd/waveform_source/tfsf_3d.h>
 
+#include <ase_reader/ase_reader.hpp>
 #include <filesystem>
 #include <memory>
 #include <sstream>
+#include <xfdtd_model/grid_model.hpp>
+#include <xfdtd_model/model_object.hpp>
+#include <xfdtd_model/model_shape.hpp>
 #include <xtensor/xnpy.hpp>
 
 #include "argparse.hpp"
@@ -22,9 +28,14 @@ int main(int argc, char** argv) {
   const auto data_path = std::filesystem::path{data_path_str};
 
   auto program = argparse::ArgumentParser("flow_field_cpu");
+  program.add_argument("-ase").help("ASE file path").required();
   program.add_argument("-f_p", "--flow_field_path")
       .help("flow field data path")
       .required();
+  program.add_argument("-r", "--resolution")
+      .help("resolution")
+      .default_value(20e-3)
+      .action([](const std::string& value) { return std::stod(value); });
   try {
     program.parse_args(argc, argv);
   } catch (const std::runtime_error& err) {
@@ -33,13 +44,99 @@ int main(int argc, char** argv) {
     exit(0);
   }
 
+  const auto dl = program.get<xfdtd::Real>("--resolution");
+  if (xfdtd::MpiSupport::instance().isRoot()) {
+    std::cout << "Resolution: " << dl << "\n";
+  }
+
+  auto metal_info_ss = std::stringstream{};
+  auto metal_vertices_ss = std::stringstream{};
+  auto metal_elements_ss = std::stringstream{};
+
+  {
+    auto ase_path_str = program.get<std::string>("-ase");
+    auto ase_path = std::filesystem::path{ase_path_str};
+    if (!std::filesystem::exists(ase_path)) {
+      std::cerr << "ASE file not found: " << ase_path_str << std::endl;
+      exit(1);
+    }
+
+    auto ase_reader = ase_reader::ASEReader{};
+    ase_reader.read(ase_path.string());
+    ase_reader.setPrecision(8);
+
+    {
+      constexpr auto unit = xfdtd::unit::Length::Millimeter;
+      const auto delta_l = xfdtd::model::ModelShape<unit>::standardToUnit(dl);
+      for (const auto& o : ase_reader.objects()) {
+        auto info_ss = std::stringstream{};
+        auto vertices_ss = std::stringstream{};
+        auto elements_ss = std::stringstream{};
+        auto grid_model = xfdtd::model::GridModel{};
+        o.write(info_ss, vertices_ss, elements_ss);
+        grid_model.read(info_ss, vertices_ss, elements_ss);
+
+        if (xfdtd::MpiSupport::instance().isRoot()) {
+          std::cout << "Object: " << o.name() << "\n";
+          std::cout << "Region: " << "\n";
+          std::cout << "  Origin: " << grid_model.triangularModelInfo().minX()
+                    << " " << grid_model.triangularModelInfo().minY() << " "
+                    << grid_model.triangularModelInfo().minZ() << "\n";
+          std::cout << "  Size: " << grid_model.triangularModelInfo().sizeX()
+                    << " " << grid_model.triangularModelInfo().sizeY() << " "
+                    << grid_model.triangularModelInfo().sizeZ() << "\n";
+          std::cout << " End: " << grid_model.triangularModelInfo().maxX()
+                    << " " << grid_model.triangularModelInfo().maxY() << " "
+                    << grid_model.triangularModelInfo().maxZ() << "\n";
+        }
+
+        if (o.name() == "metal") {
+          metal_info_ss << info_ss.str();
+          metal_vertices_ss << vertices_ss.str();
+          metal_elements_ss << elements_ss.str();
+        }
+
+        // // save to msh
+        // auto msh_path = data_path / (o.name() + ".msh");
+        // std::ofstream msh_file{msh_path, std::ios::out};
+        // if (!msh_file.is_open()) {
+        //   std::cerr << "Failed to open file: " << msh_path << std::endl;
+        //   exit(1);
+        // }
+
+        // std::cout << "Write to msh: " << msh_path << "\n";
+        // grid_model.buildUniform(delta_l, delta_l, delta_l);
+        // grid_model.writeToMsh(msh_file);
+      }
+
+      auto info_ss = std::stringstream{};
+      auto vertices_ss = std::stringstream{};
+      auto elements_ss = std::stringstream{};
+      ase_reader.write(info_ss, vertices_ss, elements_ss);
+      auto grid_model = xfdtd::model::GridModel{};
+      grid_model.read(info_ss, vertices_ss, elements_ss);
+    }
+  }
+
+  auto model_shape = std::make_unique<
+      xfdtd::model::ModelShape<xfdtd::unit::Length::Millimeter>>(
+      metal_info_ss, metal_vertices_ss, metal_elements_ss);
+  if (xfdtd::MpiSupport::instance().isRoot()) {
+    std::cout << "Model shape: " << model_shape->toString() << "\n";
+  }
+
+  auto model_object = std::make_shared<xfdtd::model::ModelObject>(
+      "metal", std::move(model_shape), xfdtd::Material::createPec());
+
   auto flow_field = std::make_shared<xfdtd::FlowField>(
       "flow_field", program.get<std::string>("--flow_field_path"));
 
   auto&& shape = flow_field->flowFieldShape();
   auto&& cube = shape.wrappedCube();
 
-  constexpr xfdtd::Real dl{20e-3};
+  if (xfdtd::MpiSupport::instance().isRoot()) {
+    std::cout << "Flow field cube: " << cube->toString() << "\n";
+  }
 
   auto domain_shape = xfdtd::Cube{
       xfdtd::Vector{-10 * dl + cube->originX(), -10 * dl + cube->originY(),
@@ -54,8 +151,9 @@ int main(int argc, char** argv) {
   auto s = xfdtd::Simulation{dl, dl, dl, 0.9, xfdtd::ThreadConfig{1, 1, 1}};
   s.addObject(domain);
   s.addObject(flow_field);
+  s.addObject(model_object);
 
-  constexpr auto l_min = dl * 20;
+  constexpr auto l_min = 20e-3 * 20;
   constexpr auto f_max = 3e8 / l_min;
   constexpr auto tau = l_min / 6e8;
   constexpr auto t_0 = 4.5 * tau;

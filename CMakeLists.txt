@@ -19,5 +19,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 find_package(xfdtd_core REQUIRED)
+find_package(xfdtd_model REQUIRED)
+
+set(XFDTD_FLOW_FIELD_DEPENDENCIES xfdtd::xfdtd_core xfdtd::xfdtd_model)
 
 add_subdirectory(src)
