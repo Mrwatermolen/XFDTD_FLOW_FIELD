@@ -5,7 +5,6 @@
 #include <xfdtd/material/dispersive_material_equation/dispersive_material_equation.h>
 
 #include <memory>
-#include <random>
 
 namespace xfdtd {
 
@@ -61,15 +60,6 @@ auto FlowField::handleDispersion(
     std::shared_ptr<ADEMethodStorage> ade_method_storage) -> void {
   const auto& grid_space = gridSpace();
 
-  // random
-  auto min_real = 8e7;
-  auto max_real = 5e8;
-  auto random_engine = std::mt19937{std::random_device{}()};
-  auto dis = std::normal_distribution<Real>{};
-  auto dice = [&dis, &random_engine, &min_real, &max_real]() {
-    return std::clamp(dis(random_engine), min_real, max_real);
-  };
-
   if (grid_space->type() != GridSpace::Type::UNIFORM) {
     throw XFDTDFlowFieldException{
         "handleDispersion(): Non-uniform grid space is not supported yet"};
@@ -100,11 +90,9 @@ auto FlowField::handleDispersion(
 
     // why dose it divide by 6 and 8?
     // Because my memory is not enough to simulate the more accurate result.
-    // auto omega_p = e.omegaP() / 6;
-    // auto gamma = e.gamma() / 8;
-
-    auto omega_p = dice();
-    auto gamma = dice();
+    // more tinier cell size means more higher frequency and more memory.
+    auto omega_p = e.omegaP() / 6;
+    auto gamma = e.gamma() / 8;
 
     auto dispersive_model = DrudeMedium::makeDrudeMedium(
         "null", 1, Array1D<Real>{omega_p}, Array1D<Real>{gamma});

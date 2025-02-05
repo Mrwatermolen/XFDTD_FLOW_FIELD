@@ -45,9 +45,18 @@ auto FlowFieldShape::readEntry(std::string_view path) const
   }
 
   std::vector<FlowFieldEntry> entries{};
-
-  // skip 4 line
+  bool skip_header = true;
   {
+    FlowFieldEntry entry{};
+    file >> entry;
+    if (file.good()) {
+      skip_header = true;
+      entries.emplace_back(entry);
+    } else {
+      file.clear();
+    }
+  }
+  if (skip_header) {
     std::string buffer;
     for (int i = 0; i < 4 && !file.eof(); ++i) {
       std::getline(file, buffer);
@@ -57,6 +66,9 @@ auto FlowFieldShape::readEntry(std::string_view path) const
   while (!file.eof()) {
     FlowFieldEntry entry{};
     file >> entry;
+    if (!file.good()) {
+      break;
+    }
     entries.emplace_back(entry);
   }
 
